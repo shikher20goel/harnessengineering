@@ -1,83 +1,111 @@
-# 03 — How to Implement a Harness
+# 03 — How to Build a Harness
 
-Two halves: **building** the initial scaffolding (a weekend), and **practicing** harness engineering on it (forever). The build below maps 1:1 to this repo's code.
+Two halves: **building** the scaffolding (a weekend of work) and **practicing** the improvement habit on it (ongoing). Every step below points to the matching file in this repo.
 
 ## Part A: Build the scaffolding
 
-### Step 0: Make the model swappable — and mockable
+### Step 0: Make the model swappable — and fakeable
 
-Define one narrow interface (`complete(system, messages, tools) → response`) and put every provider detail behind it. Then write a `MockModel` that replays scripted responses. This single decision makes the entire harness deterministic to test: you can unit-test guardrails, truncation, and compaction without an API key or a nondeterministic model in the loop.
+Hide the AI behind one tiny interface: `complete(system, messages, tools) → response`. Then write a **fake model** that just replays a script of pre-written responses.
+
+Why bother? Because now your whole harness can be tested like normal software — no API key, no randomness, no cost. This one decision pays for itself immediately.
 → [`harness/model.py`](../harness/model.py)
 
 ### Step 1: Write the loop
 
-The ~30-line canonical loop from [doc 02](02-how-a-harness-works.md), with three properties production loops share: it terminates when the model stops calling tools; every iteration checks budgets *first*; and nothing a tool does can crash it — all failures become messages the model can react to.
+The ~30-line loop from [doc 02](02-how-a-harness-works.md), with three properties every production loop shares:
+
+- it stops when the model answers without asking for a tool;
+- it checks budgets *before* each turn, not after;
+- nothing a tool does can crash it — every failure becomes a message the model can read and react to.
+
 → [`harness/agent.py`](../harness/agent.py)
 
-### Step 2: Build a small, sharp tool layer
+### Step 2: Build a few good tools
 
-Start with the four tools pi ships and mini-swe-agent approximates with bash alone: read, write, edit, bash. Then apply the ACI checklist:
+Start with four: **read, write, edit, run-a-command**. Then polish them:
 
-- Descriptions written for the model, stating *when* to use the tool, not just what it does.
-- Errors as guidance: `"old string appears 3 times; make it unique"` beats a `ValueError`.
-- Hard truncation of outputs (this repo: 20k chars, keep head+tail) — one `cat` of a build log must not evict the task from context.
-- Path confinement: file tools resolve against a workspace root and refuse escapes.
+- Write each description for the model: say *when* to use the tool, not just what it does.
+- Make errors helpful: `"old string appears 3 times; make it unique"` beats a raw exception.
+- Cap output size (this repo: 20,000 characters, keep the start and end) so one long log can't flood the agent's memory.
+- Lock file tools to one working folder, and refuse any path that tries to escape it.
 
-Resist tool sprawl. Anthropic warns against "bloated tool sets" with "ambiguous decision points"; every tool schema is context the model pays for on every request.
+Resist adding more tools. Each one is text the model re-reads every turn.
 → [`harness/tools.py`](../harness/tools.py)
 
-### Step 3: Add guardrails before you need them
+### Step 3: Add the brakes before you need them
 
-- **Budgets**: max turns, max tool calls, wall-clock. A confused agent should cost a bounded amount.
-- **Policy**: regex deny-list for the classic regrets (`rm -rf`, `sudo`, `curl | sh`, force-push), an "ask" list routed to a human callback for the gray zone (`pip install`, `git push`). Deny beats ask beats allow.
-- **Isolation**: run the workspace in a container or VM when the agent is autonomous. Treat in-process "sandboxes" as conveniences, not boundaries.
+- **Budgets**: max turns, max tool calls, max minutes. A confused agent should cost a bounded amount.
+- **Block list**: ban the classic disasters outright — `rm -rf`, `sudo`, `curl ... | sh`, force-push.
+- **Ask list**: gray-zone commands (`pip install`, `git push`) pause and ask a human "allow? y/n".
+- **A real wall**: if the agent runs unattended, put it in a container. In-process "sandboxes" are conveniences, not walls.
+
 → [`harness/guardrails.py`](../harness/guardrails.py)
 
-### Step 4: Manage the context window
+### Step 4: Manage the agent's memory
 
-In order of value-per-line-of-code:
+In order of value for effort:
 
-1. A **memory file** (`HARNESS.md` here; CLAUDE.md/AGENTS.md in production) injected into the system prompt every request. Keep it under ~60 lines — "every line is competing for attention" (Osmani).
-2. **Tool-result aging**: stub out all but the N most recent tool results; the agent can re-read.
-3. **Compaction**: over a token budget, fold the oldest turns into a summary — preserving the original task, and never orphaning a tool result from its tool call (an API-level constraint that's easy to miss).
+1. **A notes file** (here `HARNESS.md`; in the wild, `CLAUDE.md` / `AGENTS.md`), added to the system prompt on every turn. Keep it under ~60 lines — every line competes for the model's attention.
+2. **Stale-result cleanup**: keep only the last few tool outputs in full; replace older ones with "result removed — re-run if needed."
+3. **Summarizing** (compaction): past a size limit, fold the oldest turns into a short summary. Two rules: never summarize away the original task, and never separate a tool call from its result (the API will reject that — easy to miss, annoying to debug).
+
 → [`harness/context.py`](../harness/context.py)
 
-### Step 5: Trace everything
+### Step 5: Log everything
 
-Append every event — model responses, tool calls and results, policy blocks, compactions — to a JSONL file. This is the flight recorder; Part B runs on it.
+Every event — model replies, tool calls and results, blocked commands, summaries — goes to one file, one JSON line each. This is your flight recorder; Part B runs on it.
 → [`harness/trace.py`](../harness/trace.py)
 
 ### Step 6: Test the harness, not the model
 
-With `MockModel`, assert the properties that matter: the loop terminates; dangerous commands are blocked *before* execution; a runaway agent hits `max_turns`; path escapes are refused; old results get elided; compaction preserves the task; the memory file reaches the system prompt. Eleven such tests in [`tests/test_harness.py`](../tests/test_harness.py) run in 50 ms.
+Using the fake model, write tests for the things that must always be true:
 
-## Part B: Practice the discipline
+- the loop stops when the model finishes
+- a dangerous command gets blocked *before* it runs
+- a runaway agent hits the turn limit
+- a path escape gets refused
+- old results get cleaned up; summaries keep the task
+- the notes file actually reaches the model
 
-The scaffolding is table stakes. Harness engineering proper is a loop you run on top of it:
+Eleven such tests in [`tests/test_harness.py`](../tests/test_harness.py) run in 50 milliseconds.
 
-### The Ratchet Principle
+## Part B: Practice the habit
+
+The scaffolding is table stakes. The real skill is a loop you run forever:
+
+### The one habit
 
 > "Every line in a good AGENTS.md should be traceable back to a specific thing that went wrong." — Addy Osmani
 
-Hashimoto's original formulation: every time the agent makes a mistake, don't hope it does better next time — change the environment so *that* mistake can't recur. The fix escalates through four levels:
+Mitchell Hashimoto's original version: every time the agent does something bad, change its world so *that exact thing* can't happen again. The fix climbs a ladder, weakest to strongest:
 
-1. **A rule** in the memory file ("run `pytest` before declaring done") — cheapest, weakest: it's advisory.
-2. **A tool** that makes the right thing easy (a `run_tests` tool that already knows the right flags; a screenshot script) — the agent no longer has to figure it out.
-3. **A sensor** that catches the failure mechanically (a linter, a test, a CI check, a review agent) — feedback instead of hope.
-4. **A constraint** that makes the failure impossible (a deny rule, a sandbox boundary, a typed schema, dependency-direction lint) — OpenAI's "enforcement over prescription."
+1. **A rule** in the notes file ("run pytest before saying done") — cheap, but only advice.
+2. **A tool** that makes the right thing easy (a `run_tests` tool that knows the right flags) — the agent no longer has to figure it out.
+3. **A check** that catches the mistake automatically (a test, a linter, a CI gate) — caught, not hoped against.
+4. **A wall** that makes the mistake impossible (a banned command, a sandbox, a stricter tool) — deleted.
 
-Prefer the highest level you can afford. Rules drift; constraints don't.
+Climb as high as is proportionate. Rules get ignored. Walls don't.
 
 ### The working rhythm
 
-1. Run a real task. 2. Read the trace (and the diff). 3. Find the first place the agent went wrong. 4. Ask: what in the *environment* allowed that? 5. Fix at the highest ratchet level that's proportionate. 6. Re-run. Keep the memory file minimal and earned — start from an empty harness and let failures grow it, because "the right harness for your codebase is shaped by your failure history. You can't download it" (Osmani).
+1. Run a real task.
+2. Read the log (and the code diff).
+3. Find the **first** wrong step — not the last one.
+4. Ask: what in the *environment* allowed this?
+5. Fix it at the highest ladder level that makes sense.
+6. Run it again.
 
-### Scaling up (when you outgrow this repo)
+Start with an empty notes file and let real failures fill it. Don't copy someone else's — "the right harness for your codebase is shaped by your failure history. You can't download it" (Osmani).
 
-- **Long-horizon tasks**: initializer/executor agent split, JSON feature checklists, progress files, git-per-session (Anthropic's long-running-agents harness).
-- **Parallelism and context isolation**: sub-agents returning distilled summaries.
-- **Deterministic control flow**: workflow graphs (sequential/parallel/loop) instead of prompting the model to follow a process — ADK and LangGraph territory.
-- **Real sandboxing**: containers with filesystem *and* network boundaries.
-- **Evals**: a fixed task suite you re-run after every harness change, because a harness "improvement" that drops your pass rate is a regression, whatever it feels like.
+And keep a small fixed set of test tasks that you re-run after every harness change. If a change drops your pass rate, it was a regression, no matter how clever it felt.
 
-Continue to [04 — Resources](04-resources.md).
+### When you outgrow this repo
+
+- **Very long tasks**: split into a "setup" agent (builds a task list and progress file) and a "worker" agent that does one item per session, committing to git each time — Anthropic's pattern for agents that run for days.
+- **Parallel work**: helper agents with fresh memory that return only short summaries.
+- **Fixed processes**: when steps must happen in a set order, encode the order in code (a workflow), don't ask the model to remember it.
+- **Real isolation**: containers with both file and network walls.
+- **A proper test suite of tasks**: your safety net for every future harness change.
+
+Next: [04 — Sources](04-resources.md).

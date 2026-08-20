@@ -1,52 +1,65 @@
 # 01 — What Is Harness Engineering?
 
-## The definition
+## First, what's an agent?
 
-An **agent harness** is everything in an AI agent except the model itself: the loop that drives it, the tools it can call, the environment it runs in, the rules that constrain it, the context-management machinery that decides what it sees, and the feedback loops that tell it (and you) whether it worked.
+An AI model (like Claude or GPT) only does one thing: text in, text out. It can't run commands or open files by itself.
 
-**Harness engineering** is the discipline of designing and — crucially — *continuously improving* that scaffolding. Definitions from the primary sources converge:
+An **agent** is what you get when you put the model in a loop and give it tools. The model says "run this command," your code runs it, and the output goes back to the model. Repeat until the task is done.
 
-- **Databricks**: "the software infrastructure that wraps around a large language model (LLM) and enables it to act on tasks, not just respond to prompts." The model is the brain; the harness is the body.
-- **Vivek Trivedy (LangChain)**: the harness is all code, configuration, and execution logic beyond the model. "Agent = Model + Harness. … The model contains the intelligence and the harness makes that intelligence useful."
-- **Birgitta Böckeler (Thoughtworks, on martinfowler.com)**: the harness is "everything in an AI agent except the model itself"; harness engineering is what users of coding agents do to raise confidence in outputs and reduce supervision.
-- **Mitchell Hashimoto**: the practice that "anytime you find an agent makes a mistake, you take the time to engineer" the environment so it can't recur — via rules files (AGENTS.md) and purpose-built tools.
-- **OpenAI (Ryan Lopopolo)**: building the systems, constraints, and feedback loops that let agents execute autonomously. "Humans steer. Agents execute."
-- **Louis-François Bouchard**: "the work around an AI agent that makes its behavior inspectable, testable, and constrained." His analogy: "The model is the engine… the harness is the rest of the car. Steering, brakes, lane boundaries, maintenance schedule, warning lights."
+## So what's the harness?
 
-## Origin and timeline of the term
+The **harness** is everything in that setup *except* the model:
 
-The word "harness" is old engineering vocabulary — test harnesses, eval harnesses (`lm-evaluation-harness`), scaffolds, middleware. The AI-agent usage crystallized over roughly four months:
+- the loop itself
+- the tools (run a command, read a file, edit a file...)
+- the safety rules (what the agent may and may not do)
+- the memory management (what the agent gets to see as conversations grow)
+- the logs (so you can see what happened)
 
-| When | What |
+**Harness engineering** is the practice of building that scaffolding and improving it over time — especially this habit: *every time the agent makes a mistake, change its environment so the same mistake can't happen again.*
+
+Here's how the people who shaped the idea describe it, in plain terms:
+
+- **Databricks**: the harness is "the software infrastructure that wraps around a large language model (LLM) and enables it to act on tasks, not just respond to prompts." The model is the brain; the harness is the body.
+- **Vivek Trivedy (LangChain)**: "Agent = Model + Harness. … The model contains the intelligence and the harness makes that intelligence useful."
+- **Birgitta Böckeler (on martinfowler.com)**: the harness is "everything in an AI agent except the model itself."
+- **Mitchell Hashimoto** (creator of Terraform): when the agent messes up, don't just hope — engineer the environment so it can't happen again, using rules files and purpose-built tools.
+- **OpenAI**: build the systems and limits that let agents work on their own. "Humans steer. Agents execute."
+- **Louis-François Bouchard**: "The model is the engine… the harness is the rest of the car. Steering, brakes, lane boundaries, maintenance schedule, warning lights."
+
+## Where the term came from
+
+"Harness" is old engineering vocabulary — test harnesses have existed for decades. The AI meaning took shape over about four months:
+
+| When | What happened |
 |---|---|
-| Nov 2025 | Anthropic's engineering blog uses "harness" prominently: *Effective harnesses for long-running agents*. "Agent harness" already circulating in the community; the "Agent = Model + Harness" shorthand spreads via LangChain material. |
-| Feb 5, 2026 | Mitchell Hashimoto's *My AI Adoption Journey* names "Engineer the Harness" as a distinct stage of AI adoption — widely credited with formalizing the practice. |
-| Feb 11, 2026 | OpenAI publishes *Harness engineering: leveraging Codex in an agent-first world* — the first frontier-lab post using the exact phrase, with the much-cited claim of ~1M lines of code shipped by a small team in 5 months. |
-| Mar 10, 2026 | LangChain publishes Trivedy's *The Anatomy of an Agent Harness*. |
-| Mar–Jun 2026 | The ecosystem piles on: HumanLayer, Bouchard, Firecrawl, Böckeler on martinfowler.com, Addy Osmani, Databricks. The term becomes standard vocabulary. |
+| Nov 2025 | Anthropic's engineering blog writes about "harnesses" for agents that run a long time. The phrase "agent harness" is already floating around the community. |
+| Feb 5, 2026 | Mitchell Hashimoto writes about his AI journey and names "Engineer the Harness" as a stage every developer eventually reaches. Most people credit him with making it a named practice. |
+| Feb 11, 2026 | OpenAI publishes a post literally titled "Harness engineering," about a small team shipping ~1 million lines of code in 5 months. |
+| Mar 2026 | LangChain publishes "The Anatomy of an Agent Harness." |
+| Mar–Jun 2026 | Everyone joins in: HumanLayer, Bouchard, Firecrawl, martinfowler.com, Addy Osmani, Databricks. The term becomes normal vocabulary. |
 
-Attribution note: some sources (Osmani, HumanLayer) credit Trivedy with coining the phrase; others (Firecrawl, Bouchard, Stuart Miller) credit Hashimoto. Publication dates favor Hashimoto for the named discipline, with "agent harness" as a community term predating both. As Firecrawl puts it, the term "named existing informal practices developers had already built."
+(Small footnote: sources disagree on who exactly coined the phrase — some say Hashimoto, some say Trivedy. The dates favor Hashimoto. Either way, as Firecrawl notes, the term just gave a name to things developers were already doing.)
 
-## How it relates to prompt engineering and context engineering
+## Isn't this just "prompt engineering" with a new name?
 
-The three disciplines nest, though sources disagree about which contains which:
+No. The three terms cover different layers:
 
-- **Prompt engineering** optimizes the wording of individual model inputs.
-- **Context engineering** (a term popularized by Dex Horthy's 12-factor agents and Anthropic's engineering blog) curates *what information* occupies the context window across a task — retrieval, compaction, memory.
-- **Harness engineering** designs the *system* around the model: which tools exist, when context gets loaded, which actions are allowed, how failures are handled, what gets verified.
+- **Prompt engineering** = wording one request well. *"How do I phrase this ask?"*
+- **Context engineering** = managing what information the model sees over a whole task — what to include, what to summarize, what to drop. *"What's on the model's desk?"*
+- **Harness engineering** = designing the whole system: which tools exist, what's blocked, what budgets apply, how failures are handled, how work gets verified. *"What world does the agent live in?"*
 
-Databricks calls prompt and context engineering subsets of harness engineering; HumanLayer inverts the nesting ("harness engineering is a subset of context engineering"); Böckeler splits the difference ("a specific form of context engineering"). Trivedy's synthesis is the most useful: "Harnesses today are largely delivery mechanisms for good context engineering." What everyone agrees on is Bouchard's point: "It is not a trendy rename for prompting. It is what shows up when you stop demoing intelligence and start trying to ship it."
+Sources argue about which one "contains" the others, but the practical takeaway is Bouchard's: harness engineering "is not a trendy rename for prompting. It is what shows up when you stop demoing intelligence and start trying to ship it."
 
 ## Why the harness matters as much as the model
 
-The empirical case, from the sources:
+The evidence, briefly:
 
-- Anthropic (SWE-bench post, Oct 2024): "the performance of an agent on SWE-bench can vary significantly based on this scaffolding, even when using the same underlying AI model." Their deliberately minimal scaffold beat more elaborate prior SOTA.
-- Terminal-Bench 2.0 exists precisely because harness choice moves a fixed model's score by 10–20+ points — a spread comparable to a model-generation jump.
-- Aider's architect/editor split (a pure harness change — same models, different wiring) raised o1-mini from 61.1% to 71.4% on its benchmark.
-- Databricks reports a benchmark where the harness, not the model upgrade, drove the gain.
-- Counterpoint that keeps the field honest: **mini-swe-agent** scores within a few points of elaborate harnesses on SWE-bench Verified using ~100 lines of Python and *only bash* — evidence that harness complexity has diminishing returns as models improve, and that the valuable part of a harness is often its constraints and feedback, not its features.
+- **Terminal-Bench** (a public benchmark): the same model scores from ~58% to ~76% depending only on the harness. An ~18-point swing — like a whole model-generation upgrade.
+- **Anthropic** (2024): agent scores on SWE-bench "can vary significantly based on this scaffolding, even when using the same underlying AI model." Their deliberately *simple* harness beat fancier ones.
+- **Aider** (an open-source coding agent): splitting one task across two model roles — one plans, one edits — raised a model's score from 61% to 71%. Same models, different wiring.
+- **The humbling counterpoint**: mini-swe-agent, only ~100 lines of Python with just a shell tool, gets within a few points of huge commercial agents. Lesson: the *valuable* part of a harness is usually its limits and checks, not its bells and whistles.
 
 > "A decent model with a great harness beats a great model with a bad harness." — Addy Osmani
 
-Continue to [02 — How a harness works](02-how-a-harness-works.md).
+Next: [02 — How a harness works](02-how-a-harness-works.md).

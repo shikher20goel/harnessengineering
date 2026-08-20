@@ -1,69 +1,81 @@
 # 02 — How a Harness Works
 
-## The canonical loop
+## The loop at the center
 
-Strip away branding and every major agent system — Claude Code, the OpenAI Agents SDK, Hugging Face smolagents, mini-swe-agent, OpenHands — runs the same core loop:
+Remove the branding, and every major agent — Claude Code, OpenAI's agent SDK, Hugging Face smolagents, mini-swe-agent, OpenHands — runs the same core loop:
 
 ```python
 messages = [system_prompt, user_task]
 while True:
     response = model.complete(messages, tools)
-    if not response.tool_calls:        # model produced a final answer
+    if not response.tool_calls:        # model gave a final answer — done
         break
     results = execute(response.tool_calls)
-    messages += [response, results]    # feed observations back
+    messages += [response, results]    # show the model what happened
 ```
 
-Anthropic frames the same thing conceptually as **gather context → take action → verify work → repeat**. The loop terminates when the model stops calling tools (Claude/OpenAI SDKs), emits a typed final output (OpenAI SDK), or a budget runs out (`max_turns`, cost, wall time — everyone).
+Ask the model. If it wants tools, run them, show it the results, ask again. Stop when it answers without asking for a tool — or when a budget (max turns, max cost, max time) runs out.
 
-That loop is ~30 lines (see [`harness/agent.py`](../harness/agent.py)). Everything else is the harness. It decomposes into six layers.
+Anthropic describes the same loop in words: **gather context → take action → check the work → repeat.**
 
-## Layer 1: The tool layer
+That's ~30 lines (see [`harness/agent.py`](../harness/agent.py)). Everything else is the harness, and it breaks into five parts.
 
-Tools are the agent's only effectors, and tool *design* is interface design for a model. Anthropic's agent-computer-interface doctrine: document tools like you'd design a UI; keep formats close to what the model saw in training; make error messages actionable; "poka-yoke" the arguments so misuse is impossible (their example: requiring absolute paths eliminated an entire error class and helped push Claude 3.5 Sonnet to then-SOTA 49% on SWE-bench Verified).
+## Part 1: Tools — the agent's hands
 
-Design spectrum in the wild: mini-swe-agent exposes *only bash* (no tool-calling API at all — actions are parsed from text, which makes it work with any model); pi uses exactly four tools (read/write/edit/bash); Claude Code has ~15 plus MCP; smolagents' `CodeAgent` has the model write Python that *composes* tools, cutting steps ~30% (the CodeAct result). Two universal rules: sanitize and **truncate** tool output before it enters the context, and never let a tool exception kill the loop — return it as feedback instead.
+Tools are the only way the agent can touch the world. Designing them is like designing a user interface, except the user is a model. What matters:
+
+- **Error messages are instructions.** Tool output goes straight back to the model, so `"ERROR: old string appears 3 times; make it unique"` teaches the agent to recover, while a raw stack trace leaves it guessing. Anthropic's famous example: their agent kept fumbling relative file paths, so they made the tools *require* full paths — that entire mistake category vanished, and it helped set a benchmark record.
+- **Cut long outputs.** A single build log can be megabytes. Cap every tool result (this repo keeps the start and end, drops the middle) so one big output can't push the actual task out of the model's memory.
+- **Never let a tool crash the loop.** Every failure becomes a message the model can react to.
+- **Fewer tools is usually better.** Every tool description is text the model must re-read on every turn. mini-swe-agent works with *only* a shell tool; the pi agent uses exactly four (read, write, edit, shell). Claude Code has ~15. Nobody needs fifty.
+
 → In this repo: [`harness/tools.py`](../harness/tools.py)
 
-## Layer 2: Context management
+## Part 2: Memory — deciding what the agent sees
 
-The context window is a finite, degrading resource — Anthropic: "as token count increases, retrieval accuracy declines" (context rot). Production techniques:
+A model can only see a limited amount of text at once (its **context window** — think of it as a desk). Worse, models get less accurate as the desk fills up — Anthropic calls this "context rot." The harness keeps the desk clean:
 
-- **Persistent memory files** — CLAUDE.md / AGENTS.md, re-injected every request, surviving compaction. AGENTS.md is now an open format used by 60k+ repos, stewarded under the Linux Foundation. This is where harness fixes accumulate.
-- **Compaction** — when the window nears its limit, older history is summarized in place (Claude Code's auto-compact; OpenHands' `LLMSummarizingCondenser` cut API cost up to 2× with no performance loss).
-- **Tool-result aging / truncation** — old tool outputs are stubbed out; the agent can re-read.
-- **Just-in-time retrieval** — keep lightweight identifiers (file paths, queries) and fetch on demand rather than pre-loading ("progressive disclosure"; OpenAI: "Give Codex a map, not a 1,000-page instruction manual"). Aider's graph-ranked *repo map* is the precomputed variant.
-- **Sub-agent isolation** — spawn a fresh-context agent for a subtask; only a distilled summary (Anthropic: typically 1,000–2,000 tokens) returns to the parent. HumanLayer calls sub-agents a "context firewall."
+- **A notes file** — a short rules file shown to the agent at the start of every turn. Claude Code: `CLAUDE.md`. Open standard: `AGENTS.md` (60,000+ projects, now under the Linux Foundation). This repo: `HARNESS.md`. This is where your hard-won rules live, and it survives everything below.
+- **Throw away stale results** — a file read 20 turns ago is old news; replace it with a stub. The agent can re-read if it needs to.
+- **Summarize old history ("compaction")** — near the limit, fold the oldest turns into a short summary and continue. Claude Code does this automatically; OpenHands measured up to 2× lower API cost with no quality loss.
+- **Fetch on demand** — instead of pre-loading everything, give the agent file names and let it open what it needs. OpenAI's phrasing: "Give Codex a map, not a 1,000-page instruction manual." Aider's "repo map" (an auto-generated outline of your codebase's key files and functions) is a smart version of the map.
+- **Helper agents** — for a big side-quest ("find where auth is handled"), spawn a second agent with a fresh, empty desk. Only its short summary comes back — the main agent gets the answer without the 50,000 words of searching.
+
 → In this repo: [`harness/context.py`](../harness/context.py)
 
-## Layer 3: Guardrails and permissions
+## Part 3: Guardrails — the part that says "no"
 
-Three escalating mechanisms:
+An agent spends your money and changes your files in a loop, so it needs brakes. Three kinds, softest to hardest:
 
-1. **Budgets** — max turns, max cost, wall-clock limits. Every serious harness has them because autonomy means "higher costs, and the potential for compounding errors" (Anthropic).
-2. **Policy** — allow/deny/ask rules over tool calls: Claude Code's parameterized permission rules (`Bash(npm *)`) and permission modes; OpenHands' `SecurityAnalyzer` risk-rates every call and a `ConfirmationPolicy` decides whether to pause for approval.
-3. **Sandboxing** — OS-level isolation of filesystem *and* network (Anthropic uses bubblewrap/Seatbelt; "effective sandboxing requires both"; it cut permission prompts 84% because boundaries replace per-action questions). Docker-per-task is the benchmark-world standard. smolagents warns bluntly that its local executor "is not a security boundary" — real isolation needs E2B/Modal/Docker.
+1. **Budgets** — max turns, max tool calls, max minutes. Every serious harness has them: a confused agent should cost a bounded amount, then stop.
+2. **Block / ask lists** — some commands are simply banned (`rm -rf`, `sudo`, `curl ... | sh`, force-push). Gray-zone commands (`pip install`, `git push`) pause and ask a human "allow? y/n". Block beats ask; ask beats allow.
+3. **Real walls (sandboxing)** — for autonomous agents, run everything in a container that physically can't touch outside files or make arbitrary network calls. You need *both* walls — files and network — or a hijacked agent could read your secrets or send them out. Bonus from Anthropic: with real walls in place, they cut "allow this?" popups by 84%, because you don't have to ask about actions inside a boundary you trust.
 
-Human-in-the-loop is the backstop everywhere: plan modes, approval callbacks, review gates.
+Human-in-the-loop (a person approving risky steps) is the universal backstop.
+
 → In this repo: [`harness/guardrails.py`](../harness/guardrails.py)
 
-## Layer 4: Feedback and verification
+## Part 4: Checking the work
 
-Böckeler's control-theory framing is the cleanest: a harness needs **guides** (feedforward — conventions, docs, type systems, scripts) *and* **sensors** (feedback — linters, tests, review agents). "Separately, you get either an agent that keeps repeating the same mistakes… or an agent that encodes rules but never finds out whether they worked."
+An agent that can't check its work will confidently hand you broken code. Two ingredients, and you need both:
 
-Anthropic's verification hierarchy: rules-based checks (lint, tests) beat visual feedback (screenshots) beat LLM-as-judge. OpenAI's version: mechanical enforcement over prescription — custom linters and CI that *validate* architecture rather than documents that request it. And from the long-running-agents work, one anti-reward-hacking rule worth engraving: "It is unacceptable to remove or edit tests."
+- **Guidance before acting** — the notes file, project conventions, types, docs. Steers the agent up front.
+- **Checks after acting** — tests, linters, builds, review. Catches drift.
 
-## Layer 5: State and long-horizon structure
+Böckeler's warning about using only one: "you get either an agent that keeps repeating the same mistakes… or an agent that encodes rules but never finds out whether they worked."
 
-Agents outlive context windows, so durable state lives outside the model: git as memory and undo (Aider auto-commits; Anthropic's harness requires merge-ready commits per session), progress files (`claude-progress.txt`), JSON feature lists with pass/fail booleans, initializer-agent/executor-agent splits, and session-startup orientation checklists. Anthropic is blunt that "compaction isn't sufficient" for long-horizon work — you need externalized state.
+Which checks to trust, per Anthropic: automatic ones (tests, linters) are best; screenshots next; asking another AI to judge is weakest. OpenAI's version: don't write a doc *asking* agents to follow the architecture — write a lint rule that *fails the build* when they don't.
 
-## Layer 6: Observability
+One rule to engrave, because agents under pressure really do cheat: **"It is unacceptable to remove or edit tests."**
 
-Traces of every model call, tool call, and policy decision. Not optional: harness engineering is empirical, and the trace is where you find out *why* a run failed before you fix the environment. OpenAI went as far as giving agents live access to logs (LogQL), metrics (PromQL), and browser state (CDP) so the *agent* can observe the system it's changing.
+## Part 5: The flight recorder
+
+Log everything — every model reply, tool call, blocked command, and summary event — to a simple file, one event per line. When a long run fails, the real mistake usually happened many turns before the visible failure; the log is how you find it. OpenAI went further and gave their agents live access to app logs and browser state so the *agent* can debug the system it's changing.
+
 → In this repo: [`harness/trace.py`](../harness/trace.py)
 
-## Two design poles
+## Big harnesses vs small harnesses
 
-The field spans **maximal harnesses** (OpenHands: typed event logs, condensers, security analyzers; Google ADK: deterministic Sequential/Parallel/Loop workflow agents) and **minimal harnesses** (mini-swe-agent, pi, Terminal-Bench's Terminus, which offers a model nothing but a tmux pane). The trend line: as models strengthen, minimal harnesses close the gap on bounded tasks — but the constraint-and-verification layers (guardrails, sensors, budgets) stay load-bearing at every point on the spectrum. Harrison Chase: "Better models expand what harnesses need to do, not replace the need for them."
+The field has two ends. **Big**: OpenHands and Google's ADK, with typed event logs, risk analyzers, and fixed step-by-step workflows. **Small**: mini-swe-agent (~100 lines, shell only) and Terminal-Bench's reference agent, which gets nothing but a raw terminal. As models improve, small harnesses keep closing the gap on the feature side — but the limits-and-checks side (budgets, blocks, sandboxes, tests, logs) stays essential at every size. As LangChain's Harrison Chase puts it: "Better models expand what harnesses need to do, not replace the need for them."
 
-Continue to [03 — How to implement one](03-how-to-implement.md).
+Next: [03 — How to build one](03-how-to-implement.md).

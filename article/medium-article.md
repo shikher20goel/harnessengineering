@@ -1,157 +1,201 @@
-# Harness Engineering: The Discipline That Decides Whether Your AI Agent Actually Works
+# Harness Engineering, Explained Simply: Why Your AI Agent Fails (and How to Fix It)
 
-*The model is rented. The harness is yours. Here's how to build one — and how to practice the craft everyone from OpenAI to Anthropic is now writing about.*
+*The AI model is only half the story. The other half is everything you build around it. Here's the whole idea in plain English, with working code.*
 
 ---
 
-There's a number that should change how you think about AI agents.
+## Start with a surprising fact
 
-On Terminal-Bench 2.0 — a benchmark where agents complete real tasks in a terminal — the *same frontier model* scores anywhere from the high 50s to the mid 70s depending on one variable: the harness wrapped around it. That's roughly an 18-point spread. For context, that's about the size of the gap you'd expect between two model *generations*. Anthropic said the quiet part out loud back in 2024, in their SWE-bench write-up: agent performance "can vary significantly based on this scaffolding, even when using the same underlying AI model."
+Take one AI model. Wrap it in two different pieces of software. Give both the same coding tasks.
 
-Everyone is calling the same model APIs. The intelligence is a commodity you rent by the token. What you actually own — and what increasingly determines whether your agent ships working code or burns $40 of tokens going in circles — is everything *around* the model.
+One setup scores 58%. The other scores 76%.
 
-That "everything around" now has a name: the **agent harness**. And the practice of deliberately designing and improving it is **harness engineering**.
+Same model. Same tasks. An 18-point difference — about the same jump you'd get from waiting for a whole new generation of AI models. (This is from Terminal-Bench, a public benchmark that tests AI agents on real terminal tasks.)
 
-## What is a harness?
+So what changed? Not the AI. The thing *around* the AI changed.
 
-The cleanest formula comes from Vivek Trivedy at LangChain:
+That thing has a name now: the **harness**. And learning to build and improve it is called **harness engineering**. In 2026, everyone from OpenAI to Anthropic has been writing about it. This article explains what it is, how it works, and how to build one yourself — without the buzzwords.
+
+## What is an AI agent, really?
+
+Let's clear up the word "agent" first, because it sounds fancier than it is.
+
+An AI model like Claude or GPT does one thing: you send it text, it sends text back. That's it. It can't run code, open files, or browse your project. It just talks.
+
+An **agent** is what you get when you put that model inside a loop and give it tools:
+
+1. You give the model a task: "Fix the failing test in my project."
+2. The model replies: "I want to run the command `pytest`."
+3. Your code actually runs `pytest` and sends the output back to the model.
+4. The model looks at the output and asks for the next step: "Now open `utils.py`."
+5. This repeats until the model says: "Done, here's what I did."
+
+In code, the whole loop looks like this:
+
+```python
+messages = [the_task]
+while True:
+    response = model.ask(messages, tools)
+    if not response.wants_a_tool:   # model says it's finished
+        break
+    result = run_the_tool(response)
+    messages.append(result)         # show the model what happened
+```
+
+Here's the fun part: this loop is basically identical inside Claude Code, OpenAI's agent SDK, and every other major agent product. About 30 lines of code. No magic.
+
+## So where does the real work go?
+
+If the loop is 30 lines and the model is just an API call, why do some agents work great while others go in circles and waste your money?
+
+The answer is everything *around* the loop:
+
+- Which tools does the agent get, and what happens when a tool fails?
+- What does the agent get to "see" when the conversation gets really long?
+- What is the agent *not allowed* to do?
+- How do you find out why a run went wrong?
+
+All of that together is the **harness**. A good one-line picture comes from AI educator Louis-François Bouchard: *the model is the engine, and the harness is the rest of the car* — the steering, the brakes, the seatbelts, the dashboard warning lights. Nobody drives an engine to work.
+
+And the LangChain team boiled it into a formula:
 
 > **Agent = Model + Harness.** "If you're not the model, you're the harness."
 
-Concretely, the harness is: the loop that drives the model, the tools it can call, the environment those tools execute in, the rules that constrain what it's allowed to do, the machinery that decides what enters its context window, and the feedback loops that tell it — and you — whether the work succeeded.
+One more thing worth knowing: you rent the model. Everyone calls the same APIs, so the model is the same for you and your competitors. The harness is the part you actually own — and as the benchmark above shows, it can matter as much as the model itself.
 
-Louis-François Bouchard's analogy is the one that sticks: *the model is the engine; the harness is the rest of the car.* Steering, brakes, lane boundaries, warning lights. Nobody ships an engine to customers.
+## A quick history (so you know this isn't just hype)
 
-The term itself crystallized fast. Anthropic's engineering blog was writing about "effective harnesses" in late 2025. In February 2026, Mitchell Hashimoto (of HashiCorp/Ghostty fame) published his AI adoption journey and named "Engineer the Harness" as a distinct stage of maturity — the point where, instead of hoping the agent does better next time, you change the environment so the failure can't recur. Days later, OpenAI published "Harness engineering: leveraging Codex in an agent-first world," describing how a handful of engineers shipped roughly a million lines of code in five months by obsessing over scaffolding rather than prompts. Their slogan: *"Humans steer. Agents execute."* By spring, LangChain, Thoughtworks (on martinfowler.com), Addy Osmani, HumanLayer, Firecrawl, and Databricks had all published their own takes. A buzzword was born — but unusually for AI buzzwords, this one names something real, old, and load-bearing. It's the direct descendant of test harnesses, middleware, and platform engineering.
+The idea is old — test setups, build pipelines, and safety rails have always existed. The *name* is new:
 
-Is it just "prompt engineering" rebranded? No — and the distinction matters. Prompt engineering optimizes the wording of a request. Context engineering curates what information the model sees. Harness engineering designs the *system*: which tools exist and how their errors read, when context gets loaded and compacted, which actions are denied outright, what budgets stop a runaway loop. As Bouchard puts it: "It is not a trendy rename for prompting. It is what shows up when you stop demoing intelligence and start trying to ship it."
+- **Late 2025** — Anthropic's engineering blog starts writing about "harnesses" for long-running agents.
+- **Feb 2026** — Mitchell Hashimoto (creator of Terraform and the Ghostty terminal) writes about his AI journey and names a key habit: every time the agent makes a mistake, don't just hope it does better next time — *change its environment so that mistake can't happen again.*
+- **A week later** — OpenAI publishes a post literally titled "Harness engineering," describing how a small team shipped about a million lines of code in five months. Their motto: **"Humans steer. Agents execute."**
+- **Spring 2026** — LangChain, martinfowler.com, Addy Osmani, Databricks, and others all publish their own guides. The term sticks.
 
-## The 30 lines at the center of everything
+## The five parts of a harness
 
-Here's a secret hiding in plain sight: strip the branding off Claude Code, the OpenAI Agents SDK, Hugging Face's smolagents, mini-swe-agent, and OpenHands, and you find the *same loop*:
+I built a small working harness to go with this article — about 500 lines of plain Python, no libraries needed, fully tested. It's free on GitHub: **[github.com/shikher20goel/harnessengineering](https://github.com/shikher20goel/harnessengineering)**. The code below comes from it.
 
-```python
-messages = [system_prompt, user_task]
-while True:
-    response = model.complete(system, messages, tools)
-    if not response.tool_calls:      # model produced a final answer
-        break
-    results = execute(response.tool_calls)
-    messages += [response, results]  # feed observations back
+A harness has five parts. Let's walk through them like a normal engineer would.
+
+### Part 1: Tools — the agent's hands
+
+Tools are the only way the agent can touch the world: run a command, read a file, edit a file. Designing them well is the highest-value work in the whole harness. Three simple rules:
+
+**Rule 1: Error messages are instructions.** Whatever a tool returns goes straight back to the model, and the model acts on it. So a good error message literally teaches the agent what to do next. Compare:
+
+```
+ValueError: substring not found
 ```
 
-Call the model. If it wants tools, run them, append the results, go again. Stop when it answers without calling tools — or when a budget runs out.
+versus what the edit tool in my repo returns:
 
-That's it. That's the "agent." Anthropic frames it conceptually as *gather context → take action → verify work → repeat*, but the code is a while loop you could write in an afternoon.
-
-Which raises the obvious question: if the loop is 30 lines and the model is an API call, where do the other 18 benchmark points live?
-
-They live in five unglamorous layers. To make them concrete, I built a minimal harness — about 500 lines of dependency-free Python, every layer implemented and unit-tested — and put it on GitHub with the full research notes: **[github.com/shikher20goel/harnessengineering](https://github.com/shikher20goel/harnessengineering)**. Code below is from that repo.
-
-## Layer 1: Tools — interface design for a non-human user
-
-Tools are the agent's only way to touch the world, and designing them is UX design where the user is a model. Anthropic's team calls this the *agent-computer interface* (ACI), and their SWE-bench post contains my favorite example of the genre: they noticed the model kept making relative-path mistakes, so they changed the file tools to *require absolute paths*. One constraint, an entire error class deleted, and a then-state-of-the-art benchmark result built partly on such fixes.
-
-Three rules do most of the work:
-
-**Errors are prompts.** Every tool result goes straight into the model's context, so an error message is an instruction for the next step. Compare a raw `ValueError` to this, from the edit tool in my repo:
-
-```python
-def edit_file(path: str, old: str, new: str) -> str:
-    text = p.read_text()
-    n = text.count(old)
-    if n == 0:
-        return f"ERROR: old string not found in {path}. Read the file first."
-    if n > 1:
-        return f"ERROR: old string appears {n} times in {path}; make it unique."
+```
+ERROR: old string not found in app.py. Read the file first.
 ```
 
-The second version tells the agent exactly how to recover. Agents given readable, actionable errors self-correct; agents given stack traces flail.
+The first one confuses the agent. The second one tells it exactly how to recover. Agents with helpful errors fix themselves. Agents with raw stack traces flail.
 
-**Truncate ruthlessly.** One `cat` of a build log can be two megabytes. If that lands in the context window verbatim, it evicts the task itself. Every serious harness caps tool output — mine keeps the head and tail and drops the middle, because the middle of huge outputs is rarely load-bearing.
+Real-world proof: Anthropic's team noticed their agent kept messing up relative file paths (`../src/app.py`). Instead of asking it nicely to be careful, they changed the file tools to *only accept full paths*. That entire category of mistake disappeared overnight — and helped them set a record on a major coding benchmark.
 
-**Never let a tool kill the loop.** Exceptions become error results the model can react to. The loop must survive anything a tool does.
+**Rule 2: Cut long outputs.** One `cat` of a build log can be two megabytes. If you paste all of that into the conversation, it pushes the actual task out of the model's memory. Every serious harness caps tool output. Mine keeps the beginning and the end and drops the middle — the middle of a huge log is rarely the important part.
 
-How many tools? Fewer than you think. Mini-swe-agent — from the SWE-bench team — scores within a few points of elaborate harnesses using *only bash*, no tool-calling API at all. Mario Zechner's pi ships exactly four: read, write, edit, bash. Every tool schema you add is context the model pays for on every single request, and Anthropic explicitly warns against "bloated tool sets" with "ambiguous decision points."
+**Rule 3: A tool crash must never crash the loop.** Catch every error and hand it back to the model as text it can react to.
 
-## Layer 2: Context — the scarcest resource in the system
+And how many tools do you need? Fewer than you'd guess. One famous mini agent from the SWE-bench team scores nearly as well as huge commercial agents using *only* a shell command tool — nothing else. Every extra tool you add is extra text the model must read on every single turn. Start with four: read, write, edit, run a command.
 
-The context window feels big until your agent is 40 turns into a task. And it degrades before it fills: Anthropic's context-engineering post documents *context rot* — retrieval accuracy declines as token count grows. Treat context as "a finite resource with diminishing marginal returns."
+### Part 2: Memory — deciding what the agent gets to see
 
-Production harnesses converge on the same toolkit:
+A model can only "see" a limited amount of text at once — its **context window**. Think of it as the agent's desk. Long tasks pile paper onto that desk fast, and here's the catch: models actually get *worse* at finding things as the pile grows, even before the desk is full. Anthropic calls this "context rot."
 
-**A persistent memory file.** Claude Code has CLAUDE.md; the open AGENTS.md format is used by 60,000+ repositories and is now stewarded under the Linux Foundation. It's a rules file injected into every request, surviving any compression of history. My harness calls it HARNESS.md and folds it into the system prompt each turn. Keep it brutally short — Addy Osmani's guidance is under ~60 lines, because "every line is competing for attention."
+So the harness cleans the desk. Three habits cover most of it:
 
-**Tool-result aging.** A file read from twenty turns ago is stale anyway. Old tool results get collapsed to a stub — `[result elided by harness — re-run the tool if needed]` — and the agent re-reads if it cares. Cheap, safe, effective.
+**A notes file.** A small text file of project rules that gets shown to the agent at the start of every single turn. Claude Code calls it `CLAUDE.md`; the open standard is called `AGENTS.md` (used by over 60,000 projects); my repo calls it `HARNESS.md`. Things like "always run tests before saying you're done" or "never use tabs" live here. Keep it short — under 60 lines — because every line competes for the agent's attention.
 
-**Compaction.** When the window nears its budget, fold the oldest turns into a summary while preserving the original task verbatim. Claude Code does this automatically; OpenHands' summarizing condenser cut API costs up to 2× *with no measured performance loss*. One implementation subtlety that will bite you on real APIs: never split a tool call from its result — a `tool_result` whose `tool_use` was compacted away is a hard API error.
+**Throw away stale results.** A file the agent read 20 turns ago is old news; it can always read it again. So the harness replaces old tool outputs with a one-line note: *"result removed — re-run the tool if you need it."*
 
-**Just-in-time retrieval.** Don't pre-load the world; give the agent lightweight identifiers — file paths, queries — and let it fetch what it needs. OpenAI's phrasing is the memorable one: "Give Codex a map, not a 1,000-page instruction manual."
+**Summarize old history.** When the conversation gets close to the limit, fold the oldest turns into a short summary and keep going. Claude Code does this automatically. One open-source project (OpenHands) found this cut their API bill in half with no drop in quality.
 
-**Sub-agents as context firewalls.** For big exploratory subtasks, spawn a fresh-context agent and let only a distilled summary — typically 1,000–2,000 tokens, per Anthropic — return to the parent. The parent gets the conclusion without the 50,000 tokens of searching that produced it.
+### Part 3: Guardrails — the part that says "no"
 
-## Layer 3: Guardrails — the part that says no
+An agent is a program that spends your money and changes your files in a loop. You want brakes. Three kinds, from softest to hardest:
 
-An autonomous agent is a process that spends your money and mutates your filesystem in a loop. Anthropic's dry phrasing: autonomy means "higher costs, and the potential for compounding errors." The harness answers with three escalating mechanisms.
-
-**Budgets.** Max turns, max tool calls, wall-clock limits. Non-negotiable, and checked *before* each turn, not after:
+**Budgets.** A maximum number of turns, tool calls, and minutes. A confused agent should cost you a bounded amount, then stop. From my repo's tests:
 
 ```python
-looping = ModelResponse(tool_calls=[ToolCall("t", "bash", {"command": "true"})])
-script = [looping] * 50
-r = make_harness(tmp_path, script, max_turns=5).run("loop forever")
-assert r.stopped_by == "guardrail"     # passes
+# an agent that tries to loop forever...
+r = harness_with(max_turns=5).run("loop forever")
+assert r.stopped_by == "guardrail"   # ...gets stopped. Test passes.
 ```
 
-**Policy.** Allow/deny/ask rules over tool calls. Deny the classic regrets categorically — `rm -rf`, `sudo`, `curl | sh`, force-push. Route the gray zone (`pip install`, `git push`) to a human callback. Claude Code implements this as parameterized permission rules like `Bash(npm *)`; OpenHands risk-rates every action and pauses for confirmation policy. The ordering is doctrine: deny beats ask beats allow.
+**Block/ask lists.** Some commands are just banned: `rm -rf`, `sudo`, piping a download straight into a shell. Others sit in a gray zone (`pip install`, `git push`) — for those, the harness pauses and asks a human "allow this? y/n". The order matters: block beats ask, ask beats allow.
 
-**Sandboxing.** Real isolation is at the OS level, and it needs *both* halves: filesystem boundaries (the agent can only touch its workspace) and network boundaries (it can only reach approved hosts). Anthropic's sandboxing post makes the threat model concrete — a prompt-injected agent shouldn't be able to read your SSH keys *or* phone home — and reports a lovely side effect: strong boundaries let them cut permission prompts by 84%, because you no longer need to ask about every action inside a wall you trust. And heed Hugging Face's bluntness about smolagents' local executor: it "is not a security boundary." In-process sandboxes are conveniences. Containers are boundaries.
+**Real walls.** For a truly autonomous agent, run it inside a container or sandbox where it *physically can't* touch files outside its folder or call the internet freely. A nice bonus Anthropic found: once real walls exist, you can stop nagging the user with "allow this?" popups — theirs dropped by 84%.
 
-## Layer 4: Feedback — guides and sensors
+### Part 4: Checking the work — trust but verify
 
-Birgitta Böckeler's essay on martinfowler.com gives this layer the cleanest theory, borrowed from control engineering. A harness needs **guides** — feedforward signals like conventions, architecture docs, type systems — and **sensors** — feedback like linters, tests, and review checks. Her warning about using either alone:
+An agent that can't check its own work will confidently hand you broken code. So the harness gives it two things:
 
-> "Separately, you get either an agent that keeps repeating the same mistakes… or an agent that encodes rules but never finds out whether they worked."
+- **Guidance up front** — the notes file, project conventions, existing types and docs. This steers the agent before it acts.
+- **Checks after the fact** — tests, linters, builds. This catches it when it drifts.
 
-Anthropic ranks verification methods: rules-based checks (tests, linters) beat visual feedback (screenshots) beat LLM-as-judge. OpenAI's variant is *enforcement over prescription* — don't write a doc asking agents to respect layer boundaries; write a linter that fails the build when they don't. Docs request. CI enforces.
+You need both. As Birgitta Böckeler puts it on martinfowler.com: with only one of them, "you get either an agent that keeps repeating the same mistakes… or an agent that encodes rules but never finds out whether they worked."
 
-And one rule from Anthropic's long-running-agents work deserves to be engraved somewhere, because agents under pressure will reward-hack: **"It is unacceptable to remove or edit tests."**
+A rule of thumb from Anthropic: automatic checks (tests, linters) are the most trustworthy, screenshots are next, and asking another AI to judge the work is the weakest. And write this one down, because agents under pressure will cheat: **"It is unacceptable to remove or edit tests."** Yes, agents really do try to delete failing tests to "finish" a task.
 
-## Layer 5: Observability — the flight recorder
+### Part 5: The flight recorder
 
-Every model response, tool call, policy block, and compaction goes to a JSONL trace. This isn't nice-to-have logging; it's the raw material of the entire discipline, because you cannot fix what you cannot see. When a 30-turn run fails, the trace is where you find the *first* wrong step — usually somewhere around turn 7, long before the visible failure.
+Log everything the agent does — every model reply, every tool call, every blocked command — into one file, one event per line. When a 30-turn run fails, the visible failure is at turn 30, but the *actual* mistake usually happened around turn 7. The log is how you find it.
 
-## The actual discipline: the ratchet
+This isn't optional logging. It's the raw material for the entire practice, because of what comes next.
 
-Everything above is scaffolding you build once. Harness engineering proper is what you do *after* — and it's an empirical loop, not an architecture.
+## The actual skill: fix the environment, not the prompt
 
-Hashimoto's founding move: every time the agent does a Bad Thing, make an earnest effort to ensure it can never do that specific bad thing again. Osmani sharpened it into what he calls a traceability test:
+Everything above is stuff you build once, in a weekend. Harness engineering as a *practice* is what you do afterward, forever. It's one simple habit, applied ruthlessly:
+
+**Every time the agent messes up, change its world so that exact mistake can't happen again.**
+
+Not "add 'please be careful' to the prompt." Change the environment. There's a ladder of fixes, from weakest to strongest:
+
+1. **Add a rule** to the notes file. *"Run pytest before declaring done."* Cheap, but it's only advice — the agent can ignore it.
+2. **Add a tool** that makes the right thing easy. If the agent keeps fumbling test commands, give it a `run_tests` tool that already knows the right flags.
+3. **Add a check** that catches the mistake automatically. A test, a linter, a CI step. Now the mistake gets *caught* instead of hoped against.
+4. **Add a wall** that makes the mistake impossible. A banned command, a sandbox, a tool that only accepts full paths. Now the mistake is *deleted*.
+
+Always climb as high on the ladder as you reasonably can. Rules get ignored. Walls don't.
+
+Addy Osmani has a great test for whether you're doing this right:
 
 > "Every line in a good AGENTS.md should be traceable back to a specific thing that went wrong."
 
-I think of the fixes as a four-level ratchet, ordered by strength:
+In other words: don't copy someone else's giant rules file. Start empty. Run real tasks. Read the log. Find the first wrong step. Fix it at the highest level you can. Repeat. Your harness ends up shaped by *your* project's actual failure history — which is exactly why it works, and why (as Osmani says) "you can't download it."
 
-1. **A rule** in the memory file ("run pytest before declaring done"). Cheapest — and weakest, because it's advisory and competes for attention.
-2. **A tool** that makes the right behavior easy: a `run_tests` tool that already knows the flags, a screenshot script. The agent no longer has to figure it out.
-3. **A sensor** that catches the failure mechanically: a test, a linter, a CI gate, a review agent. Now the failure is *detected* instead of hoped against.
-4. **A constraint** that makes the failure impossible: a deny rule, a sandbox wall, a required-absolute-path schema. The failure class is deleted.
+One more professional habit: keep a small fixed set of test tasks and re-run them after every harness change. If your "improvement" makes the pass rate drop, it wasn't an improvement.
 
-Prefer the highest level you can afford. Rules drift. Constraints don't.
+This is also why the harness in my repo is built to be testable *without* any AI at all. It includes a fake model that just replays a script, so all 11 tests — loop stops correctly, dangerous commands get blocked, old results get cleaned up, notes file gets injected — run in 50 milliseconds with no API key. The harness is normal software. Test it like normal software.
 
-The working rhythm is unglamorous: run a real task, read the trace, find the first wrong step, ask *what in the environment allowed this*, fix at the highest proportionate ratchet level, re-run. Start from an empty memory file and let failures grow it — Osmani again: "The right harness for your codebase is shaped by your failure history. You can't download it."
+## "Won't better models make this pointless?"
 
-One more practice separates the professionals from the tinkerers: keep a fixed suite of evaluation tasks and re-run it after every harness change. A harness "improvement" that drops your pass rate is a regression, no matter how clever it feels. This is why the harness in my repo is built around a `MockModel` — a scripted stand-in that makes the entire harness deterministic to test. Eleven tests cover loop termination, guardrail blocks, path-escape refusal, result aging, compaction, and memory injection, and they run in 50 milliseconds with no API key. You test the harness *separately* from the model, exactly like any other piece of systems software. Because that's what it is.
+Fair question. Partly, yes: the *fancy* parts of harnesses (elaborate planning modes, huge tool collections) keep getting less necessary as models improve. Tiny bash-only agents already come close to the big ones on some benchmarks.
 
-## The counterargument worth taking seriously
+But notice which parts were doing the heavy lifting in everything above: budgets, blocked commands, sandboxes, tests, logs. Those don't become less necessary as agents get more capable and more autonomous — they become *more* necessary, for the same reason talented humans still need code review and production still needs guardrails. Capability without limits scales damage just as fast as it scales output.
 
-Won't better models make all this obsolete? It's not a strawman — mini-swe-agent's whole thesis is that ~100 lines of Python and a bash prompt get within a few points of elaborate harnesses on SWE-bench, and the gap keeps shrinking as models improve. The *feature* layers of harnesses — planning modes, elaborate tool suites, clever retrieval — probably do have a shelf life.
+Harrison Chase (LangChain's founder) said it well: "Better models expand what harnesses need to do, not replace the need for them."
 
-But look at which layers were doing the work in every case study above. The constraint and verification layers — budgets, policies, sandboxes, tests, traces — don't get less necessary as models get more capable and more autonomous. They get more necessary, for exactly the reason we build guardrails for talented humans: capability without constraint scales damage as fast as it scales output. Harrison Chase's line captures the trajectory: "Better models expand what harnesses need to do, not replace the need for them."
+The engine keeps getting better and cheaper. Someone still has to build the rest of the car. That someone is you.
 
-The engine keeps getting better, faster, cheaper. Someone still has to build the rest of the car.
+## Try it yourself
+
+Everything from this article — the 500-line harness, the tests, a demo you can run with zero setup and zero API keys, and four deeper research docs with all sources — is free here:
+
+**[github.com/shikher20goel/harnessengineering](https://github.com/shikher20goel/harnessengineering)** (MIT license)
+
+```bash
+git clone https://github.com/shikher20goel/harnessengineering
+cd harnessengineering
+python3 examples/mock_demo.py   # watch the loop, tools, and a guardrail in action
+```
 
 ---
 
-*All the code in this article — the full ~500-line harness, tests, offline demo, and four research docs with complete citations — is at [github.com/shikher20goel/harnessengineering](https://github.com/shikher20goel/harnessengineering) (MIT).*
-
-**Primary sources:** [OpenAI — Harness engineering](https://openai.com/index/harness-engineering/) · [Mitchell Hashimoto — My AI Adoption Journey](https://mitchellh.com/writing/my-ai-adoption-journey) · [LangChain — The Anatomy of an Agent Harness](https://www.langchain.com/blog/the-anatomy-of-an-agent-harness) · [Böckeler — Harness Engineering for Coding Agent Users](https://martinfowler.com/articles/harness-engineering.html) · [Addy Osmani — Agent Harness Engineering](https://addyosmani.com/blog/agent-harness-engineering/) · [Anthropic — Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) · [Anthropic — Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) · [Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) · [Anthropic — Claude Code sandboxing](https://www.anthropic.com/engineering/claude-code-sandboxing) · [Terminal-Bench](https://www.tbench.ai/) · [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)
+**Sources & further reading:** [OpenAI — Harness engineering](https://openai.com/index/harness-engineering/) · [Mitchell Hashimoto — My AI Adoption Journey](https://mitchellh.com/writing/my-ai-adoption-journey) · [LangChain — The Anatomy of an Agent Harness](https://www.langchain.com/blog/the-anatomy-of-an-agent-harness) · [Böckeler — Harness Engineering for Coding Agent Users](https://martinfowler.com/articles/harness-engineering.html) · [Addy Osmani — Agent Harness Engineering](https://addyosmani.com/blog/agent-harness-engineering/) · [Anthropic — Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) · [Anthropic — Effective context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) · [Anthropic — Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) · [Terminal-Bench](https://www.tbench.ai/) · [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent)
