@@ -15,6 +15,8 @@ Harness-engineering principles encoded here:
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,8 +73,18 @@ class ToolRegistry:
 
 
 # --------------------------------------------------------------------------
-# Built-in tools: bash + a minimal file suite, all confined to `workspace`.
+# Built-in tools: bash + a minimal file suite. The file tools are confined to
+# `workspace`; bash only *starts* there and runs with your user's permissions,
+# so run untrusted tasks inside a container or VM.
 # --------------------------------------------------------------------------
+
+_SECRET_ENV = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|SESSION", re.IGNORECASE)
+
+
+def _scrubbed_env() -> dict[str, str]:
+    """The parent env minus anything that looks like a credential, so a
+    prompt-injected `env` or `curl -d "$ANTHROPIC_API_KEY"` has nothing to leak."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
 
 def _resolve_inside(workspace: Path, path: str) -> Path:
     """Resolve `path` and refuse anything outside the workspace (guardrail)."""
@@ -89,7 +101,7 @@ def build_default_tools(workspace: Path, bash_timeout: int = 60) -> ToolRegistry
     def bash(command: str) -> str:
         proc = subprocess.run(
             command, shell=True, cwd=workspace, timeout=bash_timeout,
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=_scrubbed_env(),
         )
         out = proc.stdout + (("\n[stderr]\n" + proc.stderr) if proc.stderr else "")
         return f"exit_code={proc.returncode}\n{out or '(no output)'}"
